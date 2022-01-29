@@ -1,0 +1,158 @@
+plugins {
+    id 'java'
+    // https://github.com/wpilibsuite/gradle-jni
+    id 'edu.wpi.first.GradleJni' version '1.0.0'
+    id 'c'
+    id 'edu.sc.seis.launch4j' version '2.5.1'
+}
+
+group 'com.application.areca'
+version '7.5'
+
+repositories {
+    mavenCentral()
+}
+
+defaultTasks 'clean', 'build','createExe', 'createExeTui', 'copyDependencies', 'copyToDistributionDir'
+
+if (!hasProperty('buildProfile')) ext.buildProfile = 'linuxX64'
+apply from: "profile-${buildProfile}.gradle"
+
+String mainClassGui = 'com.application.areca.launcher.gui.Launcher'
+String mainClassTui = 'com.application.areca.launcher.tui.Launcher'
+
+tasks.named('jar') {
+    manifest {
+        attributes('Implementation-Title': project.name,
+                'Implementation-Version': project.version,
+                'Main-Class': mainClassGui)
+    }
+}
+
+
+
+model {
+    // https://docs.gradle.org/current/userguide/native_software.html
+    components {
+        arecafs(JniNativeLibrarySpec) {
+            enableCheckTask true
+            javaCompileTasks << compileJava
+            sources {
+                c {
+                    source {
+                        srcDirs 'src/main/c'
+                        include '**/*.c'
+                    }
+                }
+            }
+        }
+    }
+    binaries {
+        all {
+            // Define toolchain-specific compiler and linker options
+            if (toolChain in Gcc) {
+// https://gcc.gnu.org/onlinedocs/gcc-11.2.0/gcc/Code-Gen-Options.html#Code-Gen-Options
+                cppCompiler.args "-fPIC"
+// https://gcc.gnu.org/onlinedocs/gcc-11.2.0/gcc/Link-Options.html#Link-Options
+                linker.args "-lacl"
+            }
+        }
+    }
+}
+
+
+import org.apache.tools.ant.filters.ReplaceTokens
+import org.gradle.internal.os.OperatingSystem
+
+tasks.register('copyToDistributionDir', Copy) {
+    group = 'Build'
+    description = 'Copies all files to distribution directory.'
+
+    dependsOn tasks.build
+    mustRunAfter createExe, createExeTui, copyDependencies
+
+    into 'build'
+
+    into("dist/linux"){
+        from layout.projectDirectory.dir("src/main/resources"), layout.projectDirectory.file('src/linux/resources')
+
+        filesMatching('**/*.sh') {
+            mode = 0755
+        }
+
+        filesMatching('config/*.properties') {
+           filter(ReplaceTokens, tokens: [FILESYSTEM_ACCESSOR_IMPL: 'com.myJava.file.metadata.posix.basic.DefaultMetaDataAccessor'])
+        }
+     }
+    into("dist/linux/lib") {
+        from layout.buildDirectory.file("libs/arecafs/shared/libarecafs.so"), layout.buildDirectory.dir("libs"), layout.projectDirectory.file('lib/local_policy.jar')
+        exclude "arecafs"
+    }
+
+    into("launch4j"){
+        from layout.projectDirectory.dir("src/main/resources"), layout.projectDirectory.file('src/windows/resources')
+        filesMatching('config/*.properties') {
+        filter(ReplaceTokens, tokens: [FILESYSTEM_ACCESSOR_IMPL: 'com.myJava.file.metadata.windows.WindowsMetaDataAccessor'])
+
+        }
+    }
+    into("launch4j/lib"){
+        from layout.buildDirectory.dir("libs"), layout.projectDirectory.file('lib/local_policy.jar')
+    }
+
+
+
+}
+
+createExe {
+    mainClassName = mainClassGui
+    icon = "${projectDir}/src/windows/resources/icons/ico_72.ico"
+    jreRuntimeBits = 64
+    dontWrapJar true
+    cmdLine '-Duser.dir="./" -Djava.library.path="./lib/" -Djava.system.class.loader=com.application.areca.impl.tools.ArecaClassLoader'
+    classpath = ['lib/*', 'config/*', 'translations/*']
+}
+
+//tasks.register('createExeTui', edu.sc.seis.launch4j.tasks.Launch4jLibraryTask) {
+task createExeTui(type: edu.sc.seis.launch4j.tasks.Launch4jLibraryTask) {
+    mainClassName = mainClassTui
+    outfile "${project.name}_cl.exe"
+    icon = "${projectDir}/src/windows/resources/icons/ico_72.ico"
+    jreRuntimeBits = 64
+    dontWrapJar true
+    cmdLine '-Duser.dir="./" -Djava.library.path="./lib/" -Djava.system.class.loader=com.application.areca.impl.tools.ArecaClassLoader'
+    classpath = ['lib/*', 'config/*', 'translations/*']
+}
+
+task copyDependencies(type: Copy) {
+    mustRunAfter createExe, createExeTui
+    from configurations.default
+    into  layout.buildDirectory.dir("libs")
+}
+
+
+dependencies {
+    testImplementation 'org.junit.jupiter:junit-jupiter-api:5.8.1'
+    testRuntimeOnly 'org.junit.jupiter:junit-jupiter-engine:5.8.1'
+
+    implementation 'javax.activation:activation:1.1'
+    implementation 'commons-codec:commons-codec:1.4'
+    implementation 'commons-net:commons-net:1.4.1'
+    implementation 'oro:oro:2.0.8'
+    implementation 'javax.mail:mail:1.4'
+    implementation 'org.eclipse.core:org.eclipse.core.commands:3.6.0'
+
+    implementation 'org.eclipse.equinox:org.eclipse.equinox.common:3.6.0'
+
+    implementation('org.eclipse:jface:3.3.0-I20070606-0010') {
+        exclude group: 'org.eclipse', module: 'swt'
+        exclude group: 'org.eclipse.core', module: 'commands'
+    }
+
+    implementation group: 'com.jcraft', name: 'jsch', version: '0.1.42'
+
+}
+
+test {
+    useJUnitPlatform()
+}
